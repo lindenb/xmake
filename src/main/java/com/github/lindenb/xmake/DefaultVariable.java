@@ -9,20 +9,27 @@ public class DefaultVariable
 	implements Variable
 	{
 	private String name;
+	private Context contextAtDefinition;
 	private List<Node> elements = new ArrayList<>();
-	public DefaultVariable(String name)
+	public DefaultVariable(Context ctx,String name)
 		{
+		this.contextAtDefinition=ctx;
 		this.name=name;
 		}
-	public DefaultVariable(String name,Node root)
+	public DefaultVariable(Context ctx,String name,Node root)
 		{
-		this(name);
+		this(ctx,name);
 		this.elements.add(root);
 		}
-	public DefaultVariable(String name, List<Node> elements)
+	public DefaultVariable(Context ctx,String name, List<Node> elements)
 		{
-		this(name);
+		this(ctx,name);
 		this.elements.addAll(elements);
+		}
+	
+	public Context getContext()
+		{
+		return contextAtDefinition;
 		}
 	
 	@Override
@@ -47,6 +54,6 @@ public class DefaultVariable
 	
 	@Override
 	public Variable clone(){
-		return new DefaultVariable(getName(),this.elements);
+		return new DefaultVariable(this.contextAtDefinition,getName(),this.elements);
 		}
 	}

@@ -280,7 +280,7 @@ public abstract class AbstractEval implements Eval
 		Attr att=root.getAttributeNode("name");
 		if(att==null) throw new EvalException("@name missing");
 		LOG.info("creating context "+att.getValue());
-		DefaultVariable v= new DefaultVariable(att.getValue(),_list(root));
+		DefaultVariable v= new DefaultVariable(cx,att.getValue(),_list(root));
 		cx.put(v);
 		LOG.info(v.toString());
 		}
@@ -413,5 +413,29 @@ public abstract class AbstractEval implements Eval
 		 	}
 		return L;
 		}
+	
+	private static class MergingContext
+		implements Context
+		{
+		Context primary;
+		Context secondary;
+		MergingContext(Context primary,Context secondary)
+			{
+			this.primary=primary;
+			this.secondary=secondary;
+			}
+		@Override
+		public Variable get(String name)
+			{
+			Variable v=primary.get(name);
+			return v==null?secondary.get(name):v;
+			}
+		@Override
+		public void put(Variable b) {
+			this.primary.put(b);
+			}
+		
+		}
+	
 	
 	}
