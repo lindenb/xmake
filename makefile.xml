@@ -1,0 +1,21 @@
+<xmake>
+
+<define name="files">file1 file2</define>
+
+<rule>
+	<input>file1.c</input>
+	<output>file1.o</output>
+</rule>
+
+<rule>
+	<input><addsuffix suffix=".o"><variable name="files"/></addsuffix></input>
+	<output>a.out</output>
+</rule>
+
+<rule>
+	<input>file2.c</input>
+	<output>file2.o</output>
+</rule>
+
+
+</xmake>

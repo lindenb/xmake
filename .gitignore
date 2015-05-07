@@ -26,3 +26,12 @@
 *.exe
 *.out
 *.app
+
+
+*~
+.classpath
+.project
+bin
+*.class
+*.jar
+dist
