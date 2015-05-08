@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import javax.xml.parsers.DocumentBuilder;
@@ -29,12 +30,14 @@ public class XMake
 	private File workingDirectory = new File( System.getProperty("user.dir"));
 	
 	private class MainContext
-		extends DefaultContext
+		extends Context
 		{
 		MainContext()
 			{
 			}
 		}
+	
+	
 	
 	private class DefaultEval
 		extends AbstractEval
@@ -45,10 +48,13 @@ public class XMake
 			this.dom = dom;
 			}
 		
+		
 		@Override
 		protected void foundRuleEvent(Rule rule) throws EvalException {
 			XMake.this.rules.add(rule);
 			}
+		
+		
 		
 		public void eval(Context ctx)throws EvalException
 			{
@@ -92,6 +98,7 @@ public class XMake
 	
 	public int instanceMain(String args[]) throws EvalException
 		{
+		String makefileFile=null;
 		LOG.setLevel(Level.INFO);
 		
 		int optind=0;
@@ -103,6 +110,14 @@ public class XMake
 				{
 				usage(System.out);
 				return 0;
+				}
+			else if((args[optind].equals("--file") || args[optind].equals("-f") ) && optind+1 < args.length)
+				{
+				makefileFile=args[++optind];
+				}
+			else if((args[optind].equals("-C") ) && optind+1 < args.length)
+				{
+				this.workingDirectory=new File(args[++optind]);
 				}
 			else if(args[optind].equals("--log") && optind+1 < args.length)
 				{
@@ -126,32 +141,44 @@ public class XMake
 			}
 		
 		
-		
+		//search default makefile
+		if(makefileFile==null)
+			{
+			for(String altName:new String[]{"makefile.xml","Makefile.xml","make.xml","xmake.xml"})
+				{
+				File altFile=new File(altName);
+				LOG.info("trying "+altName);
+				if(altFile.exists() && altFile.isFile())
+					{
+					makefileFile=altName;
+					break;
+					}
+				}
+			if(makefileFile==null)
+				{
+				LOG.log(Level.SEVERE,"No input provided");
+				return -1;
+				}
+			}
+
 		
 		try {
 			DocumentBuilderFactory dbf=DocumentBuilderFactory.newInstance();
 			DocumentBuilder db=dbf.newDocumentBuilder();
-			
-			if(optind==args.length)
+			if(makefileFile.equals("-"))
 				{
 				LOG.info("Reading <stdin>");
 				this.xmlMakefile =db.parse(System.in);
 				}
-			else if(optind+1==args.length)
-				{
-				LOG.info("Reading "+args[optind]);
-				this.xmlMakefile =db.parse(new File(args[optind]));
-				}
 			else
 				{
-				LOG.warning("Illegal number of arguments");
-				return -1;
+				LOG.info("Reading "+makefileFile);
+				this.xmlMakefile =db.parse(new File(makefileFile));
 				}
-			
 			} 
 		catch (Exception e)
 			{
-			LOG.warning("Cannot read input makefile");
+			LOG.log(Level.SEVERE,"Cannot read input "+makefileFile);
 			e.printStackTrace();
 			return -1;
 			}
@@ -159,34 +186,36 @@ public class XMake
 		compile();
 		for(Rule rule : this.rules )
 			{
-			List<String> outputs = rule.getOutputs(mainContext);
+			List<String> outputs = rule.getOutputs();
 			
-			
-			
-			for(String input :   rule.getInputs(this.mainContext) )
+			for(String output :   outputs )
 				{
-				DepFile depFile = this.depFilesHash.get(input);
-				if( depFile == null)
+
+				DepFile outDep = this.depFilesHash.get(output);
+				if( outDep== null)
 					{
-					LOG.info("Creating target file "+input);
-					depFile = new DepFile(input);
-					this.depFilesHash.put(input,depFile);
+					outDep = new DepFile(output);
+					this.depFilesHash.put(output,outDep);
 					}
-				if( depFile.rule != null )
+				if( outDep.rule != null )
 					{
-					LOG.warning("Target file defined twice "+input);
+					LOG.warning("Target file defined twice "+outDep);
 					System.exit(-1);	
 					}
-				depFile.rule = rule;
-				for(String output :   outputs )
+				outDep.rule = rule;
+				
+			
+			
+				for(String input :   rule.getInputs())
 					{
-					DepFile outDep = this.depFilesHash.get(output);
-					if( outDep== null)
+					DepFile depFile = this.depFilesHash.get(input);
+					if( depFile == null)
 						{
-						outDep = new DepFile(output);
-						this.depFilesHash.put(output,outDep);
+						LOG.info("Creating target file "+input);
+						depFile = new DepFile(input);
+						this.depFilesHash.put(input,depFile);
 						}
-					depFile.prerequisites.add(outDep);
+					outDep.prerequisites.add(depFile);
 					}
 				}
 			}
@@ -212,11 +241,21 @@ public class XMake
 			File tmpDir=null;
 			for(DepFile dp:L)
 				{
-				LOG.info(dp.toString());
+				LOG.info("considering "+dp.toString()+" : "+" "+dp.prerequisites+" "+(dp.rule==null));
+				Rule rule= dp.rule;
+				if(!rule.hasCommand()) continue;
+				List<String> requirementsList = rule.getInputs();
+				Context ctx=new Context(rule.getContext());
+				LOG.info(rule.getContext().toString());
+				ctx.put(new SystemVariable(Rule.TARGET_VARNAME, dp.toString()));
+				LOG.info("rule.ctx:"+rule.getContext().toString());
+				LOG.info("rule.ctx:"+ctx);
+				LOG.info("dp:"+dp.toString());
+				
 				File tmpFile = File.createTempFile("xmake.", ".sh",tmpDir);
 				PrintWriter pw=new PrintWriter(tmpFile);
 				pw.println("#/bin/bash");
-				pw.println("ls");
+				rule.eval(ctx, pw);
 				pw.flush();
 				pw.close();
 				Runtime.getRuntime().exec("chmod u+x "+tmpFile);

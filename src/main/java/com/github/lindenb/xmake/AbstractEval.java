@@ -266,7 +266,10 @@ public abstract class AbstractEval implements Eval
 	protected void _target(Context cx,Appendable w,Element root) throws EvalException
 		{
 		Variable v=cx.get(Rule.TARGET_VARNAME);
-		if(v==null) return;
+		if(v==null)
+			{
+			throw new EvalException("undefined target name "+cx);
+			}
 		try
 			{
 			w.append(SystemVariable.class.cast(v).getValue());
@@ -311,7 +314,7 @@ public abstract class AbstractEval implements Eval
 		String varName="";
 		for(String t: tokens)
 			{
-			DefaultContext ctx=new DefaultContext(cx);
+			Context ctx=new Context(cx);
 			ctx.put(new SystemVariable(varName, t));
 			_childrenOf(cx,w,root);
 			}
@@ -338,7 +341,7 @@ public abstract class AbstractEval implements Eval
 	protected void _choose(Context cx,Appendable w,Element root) throws EvalException
 		{
 		Element otherwise=null;
-		DefaultContext ctx=new DefaultContext(cx);
+		Context ctx=new Context(cx);
 		for(Node n1=root.getFirstChild();
 				 n1!=null;n1=n1.getNextSibling()
 				)
@@ -372,7 +375,7 @@ public abstract class AbstractEval implements Eval
 		{
 		Element test=null;
 		Element then=null;
-		DefaultContext ctx=new DefaultContext(cx);
+		Context ctx=new Context(cx);
 		for(Node n1=root.getFirstChild();
 				 n1!=null;n1=n1.getNextSibling()
 				)
@@ -409,7 +412,7 @@ public abstract class AbstractEval implements Eval
 	
 	protected boolean _test(Context cx,Appendable w,Element root) throws EvalException
 		{
-		DefaultContext ctx=new DefaultContext(cx);
+		Context ctx=new Context(cx);
 		StringBuilder sb=new StringBuilder();
 		_childrenOf(ctx,sb,root);
 		return !sb.toString().trim().isEmpty();
@@ -420,9 +423,11 @@ public abstract class AbstractEval implements Eval
 		throw new EvalException("Unexpected Rule");
 		}
 	
+	
+	
 	protected void _rule(Context cx,Appendable w,Element root) throws EvalException
 		{
-		DefaultRule rule=new DefaultRule(root);
+		Rule rule = new Rule(root,cx);
 		foundRuleEvent(rule);
 		}
 	
@@ -463,29 +468,5 @@ public abstract class AbstractEval implements Eval
 		 	}
 		return L;
 		}
-	
-	private static class MergingContext
-		implements Context
-		{
-		Context primary;
-		Context secondary;
-		MergingContext(Context primary,Context secondary)
-			{
-			this.primary=primary;
-			this.secondary=secondary;
-			}
-		@Override
-		public Variable get(String name)
-			{
-			Variable v=primary.get(name);
-			return v==null?secondary.get(name):v;
-			}
-		@Override
-		public void put(Variable b) {
-			this.primary.put(b);
-			}
-		
-		}
-	
 	
 	}

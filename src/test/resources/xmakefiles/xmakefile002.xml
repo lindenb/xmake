@@ -1,12 +1,13 @@
 <xmake>
 
 <rule>
-	<input>test.o</input>
-	<command>gcc -o <target/> </command>
+	<input>test.c</input>
+	<output>test.o</output>
+	<command>gcc -o <target/> test.c</command>
 </rule>
 
 <rule>
-	<input>test.c</input>
+	<output>test.c</output>
 	<command>echo "int main(int argc,char** argv){return 0;}" &gt; <target/></command>
 </rule>
 
