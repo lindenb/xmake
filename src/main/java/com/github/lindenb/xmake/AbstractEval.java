@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 
 import org.w3c.dom.Attr;
 import org.w3c.dom.Document;
+import org.w3c.dom.DocumentFragment;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.Text;
@@ -28,10 +29,38 @@ public abstract class AbstractEval implements Eval
 	
 	protected Appendable _childrenOf(Context ctx,Appendable w,Node root) throws EvalException
 		{
-		for(Node n1=root.getFirstChild();
-				 n1!=null;n1=n1.getNextSibling()
-				)
+		/* used to keep trace of previous node after
+		 * replacing a variable by a define
+		 */
+		Node prevNode =null;
+		
+		for(;;)
 			{
+			Node n1=null;
+			if(prevNode == null)
+				{
+				// prev is null, restore to first node
+				n1 = root.getFirstChild();
+				}
+			else
+				{
+				// regular child scan
+				n1 = prevNode.getNextSibling();
+				}
+			if(n1==null) break;
+			
+			//handle <variable/>, replace current node with value of variable
+			if(n1.getNodeType() == Node.ELEMENT_NODE &&
+				n1.getNodeName().equals("variable"))
+				{
+				Node insert = _variable(ctx,Element.class.cast(n1));
+				root.replaceChild(n1, insert);
+				//don't update prevNode and re-do the loop;
+				continue;
+				}
+			prevNode = n1;
+						
+			
 			switch(n1.getNodeType())
 				{
 				case Node.ELEMENT_NODE:
@@ -120,7 +149,7 @@ public abstract class AbstractEval implements Eval
 			}
 		else if(name.equals("variable"))
 			{
-			_variable(ctx, w, root);
+			throw new IllegalStateException();
 			}
 		else
 			{
@@ -128,7 +157,7 @@ public abstract class AbstractEval implements Eval
 			}
 		}
 	
-	protected void _variable(Context cx,Appendable w,Element root) throws EvalException
+	protected Node _variable(Context cx,Element root) throws EvalException
 		{
 		Attr att=root.getAttributeNode("name");
 		if(att==null) throw new EvalException();
@@ -141,32 +170,25 @@ public abstract class AbstractEval implements Eval
 			throw new EvalException();
 			//return;
 			}
-		_variable(cx,w,variable);
-		}
-	protected void _variable(Context cx,Appendable w,Variable variable) throws EvalException
-		{
-		if(variable==null) return; 
+		Document owner = root.getOwnerDocument();
+		DocumentFragment frag = owner.createDocumentFragment();
+		
 		switch(variable.getType())
 			{
 			case DOM:
 				for(Node n: DefaultVariable.class.cast(variable).nodes())
 					{
-					LOG.info(n.getNodeName());
-					_childrenOf(cx, w, n);
+					frag.appendChild(n.cloneNode(true));
 					}
 				break;
 			case SYSTEM:
 				{	
-				try {
-					w.append(SystemVariable.class.cast(variable).getValue());
-					}
-				catch (Exception e) {
-					throw new EvalException(e);
-					}
+				frag.appendChild(owner.createTextNode(SystemVariable.class.cast(variable).getValue()));
 				break;
 				}
 			default: throw new EvalException();
 			}
+		return frag;
 		}
 	
 	protected void _addsuffix(Context cx,Appendable w,Element root) throws EvalException
@@ -215,21 +237,49 @@ public abstract class AbstractEval implements Eval
 	protected void _dependencies(Context cx,Appendable w,Element root) throws EvalException
 		{
 		Variable v=cx.get(Rule.DEPENDENCIES_VARNAME);
-		if(v!=null) _variable(cx,w,v);
+		if(v==null) return;
+		try
+			{
+			w.append(SystemVariable.class.cast(v).getValue());
+			}
+		catch (Exception e)
+			{
+			throw new EvalException(e);
+			}
 		}
 	
 	protected void _dependency(Context cx,Appendable w,Element root) throws EvalException
 		{
 		Variable v=cx.get(Rule.DEPENDENCY_VARNAME);
-		if(v!=null) _variable(cx,w,v);
+		if(v==null) return;
+		try
+			{
+			w.append(SystemVariable.class.cast(v).getValue());
+			}
+		catch (Exception e)
+			{
+			throw new EvalException(e);
+			}
 		}
 
 	
 	protected void _target(Context cx,Appendable w,Element root) throws EvalException
 		{
 		Variable v=cx.get(Rule.TARGET_VARNAME);
-		if(v!=null) _variable(cx,w,v);
+		if(v==null) return;
+		try
+			{
+			w.append(SystemVariable.class.cast(v).getValue());
+			}
+		catch (Exception e)
+			{
+			throw new EvalException(e);
+			}
 		}
+	
+	
+	
+
 	
 	protected void _normalize_space(Context cx,Appendable w,Element root) throws EvalException
 		{

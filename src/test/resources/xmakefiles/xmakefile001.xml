@@ -1,0 +1,8 @@
+<xmake>
+
+<rule>
+	<input>test.c</input>
+	<command>echo "int main(int argc,char** argv){return 0;}" &gt; <target/></command>
+</rule>
+
+</xmake>

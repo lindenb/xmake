@@ -2,6 +2,8 @@ package com.github.lindenb.xmake;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -9,6 +11,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.xml.parsers.DocumentBuilder;
@@ -23,6 +26,7 @@ public class XMake
 	private static long ID_GENERATOR=1L;
 	private final static Logger LOG = Logger.getLogger(XMake.class.getName()); 
 	private Document xmlMakefile;
+	private File workingDirectory = new File( System.getProperty("user.dir"));
 	
 	private class MainContext
 		extends DefaultContext
@@ -75,18 +79,81 @@ public class XMake
 		parser.eval(this.mainContext);
 		}
 	
-	
-	
-	public void instanceMain(String args[]) throws EvalException
+	private void usage(PrintStream out)
 		{
+		System.err.println("Options:");
+		}
+	
+	public void instanceMainWithExit(String args[]) throws EvalException
+		{
+		System.exit(instanceMain(args));
+		}
+	
+	
+	public int instanceMain(String args[]) throws EvalException
+		{
+		LOG.setLevel(Level.INFO);
+		
+		int optind=0;
+		while(optind< args.length)
+			{
+			if(args[optind].equals("-h") ||
+			   args[optind].equals("-help") ||
+			   args[optind].equals("--help"))
+				{
+				usage(System.out);
+				return 0;
+				}
+			else if(args[optind].equals("--log") && optind+1 < args.length)
+				{
+				LOG.setLevel(Level.parse(args[++optind]));
+				}
+			else if(args[optind].equals("--"))
+				{
+				optind++;
+				break;
+				}
+			else if(args[optind].startsWith("-"))
+				{
+				System.err.println("Unknown option "+args[optind]);
+				return -1;
+				}
+			else 
+				{
+				break;
+				}
+			++optind;
+			}
+		
+		
+		
+		
 		try {
 			DocumentBuilderFactory dbf=DocumentBuilderFactory.newInstance();
 			DocumentBuilder db=dbf.newDocumentBuilder();
-			this.xmlMakefile =db.parse(new File(args[0]));
+			
+			if(optind==args.length)
+				{
+				LOG.info("Reading <stdin>");
+				this.xmlMakefile =db.parse(System.in);
+				}
+			else if(optind+1==args.length)
+				{
+				LOG.info("Reading "+args[optind]);
+				this.xmlMakefile =db.parse(new File(args[optind]));
+				}
+			else
+				{
+				LOG.warning("Illegal number of arguments");
+				return -1;
+				}
+			
 			} 
-		catch (Exception e) {
+		catch (Exception e)
+			{
+			LOG.warning("Cannot read input makefile");
 			e.printStackTrace();
-			return;
+			return -1;
 			}
 		
 		compile();
@@ -140,14 +207,43 @@ public class XMake
 				}
 			L.add(i, dp);
 			}
-		LOG.info(L.toString());
+		try
+			{
+			File tmpDir=null;
+			for(DepFile dp:L)
+				{
+				LOG.info(dp.toString());
+				File tmpFile = File.createTempFile("xmake.", ".sh",tmpDir);
+				PrintWriter pw=new PrintWriter(tmpFile);
+				pw.println("#/bin/bash");
+				pw.println("ls");
+				pw.flush();
+				pw.close();
+				Runtime.getRuntime().exec("chmod u+x "+tmpFile);
+				Process p = new ProcessBuilder().command("/bin/bash",tmpFile.getPath()).start();
+				StreamConsummer seInfo = new StreamConsummer(p.getInputStream(), System.out,"[LOGO "+dp+"]");
+				StreamConsummer seError = new StreamConsummer(p.getErrorStream(), System.err,"[LOGE "+dp+"]");
+	    		seInfo.start();
+	    		seError.start();
+				int ret= p.waitFor();
+				seInfo.join();
+	  			seError.join();
+				tmpFile.delete();
+				LOG.info("done");
+				}
+			}
+		catch(Exception err)
+			{
+			err.printStackTrace();
+			return -1;
+			}
 
-		
+		return 0;
 		}
 	
 	public static void main(String args[]) throws Exception
 		{
 		XMake app = new XMake();
-		app.instanceMain(args); 
+		app.instanceMainWithExit(args); 
 		}
 	}
