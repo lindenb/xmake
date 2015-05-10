@@ -43,6 +43,7 @@ public class XMake
 		extends AbstractEval
 		{
 		private Document dom;
+		private Rule topRule=null;
 		DefaultEval(Document dom)
 			{
 			this.dom = dom;
@@ -52,6 +53,7 @@ public class XMake
 		@Override
 		protected void foundRuleEvent(Rule rule) throws EvalException {
 			XMake.this.rules.add(rule);
+			if(topRule==null) topRule=rule;
 			}
 		
 		
@@ -238,37 +240,67 @@ public class XMake
 			}
 		try
 			{
-			File tmpDir=null;
-			for(DepFile dp:L)
+			while(!L.isEmpty())
 				{
-				LOG.info("considering "+dp.toString()+" : "+" "+dp.prerequisites+" "+(dp.rule==null));
-				Rule rule= dp.rule;
-				if(!rule.hasCommand()) continue;
-				List<String> requirementsList = rule.getInputs();
-				Context ctx=new Context(rule.getContext());
-				LOG.info(rule.getContext().toString());
-				ctx.put(new SystemVariable(Rule.TARGET_VARNAME, dp.toString()));
-				LOG.info("rule.ctx:"+rule.getContext().toString());
-				LOG.info("rule.ctx:"+ctx);
-				LOG.info("dp:"+dp.toString());
+				List<DepFile> agenda = new ArrayList<>();
+				File tmpDir=null;
 				
-				File tmpFile = File.createTempFile("xmake.", ".sh",tmpDir);
-				PrintWriter pw=new PrintWriter(tmpFile);
-				pw.println("#/bin/bash");
-				rule.eval(ctx, pw);
-				pw.flush();
-				pw.close();
-				Runtime.getRuntime().exec("chmod u+x "+tmpFile);
-				Process p = new ProcessBuilder().command("/bin/bash",tmpFile.getPath()).start();
-				StreamConsummer seInfo = new StreamConsummer(p.getInputStream(), System.out,"[LOGO "+dp+"]");
-				StreamConsummer seError = new StreamConsummer(p.getErrorStream(), System.err,"[LOGE "+dp+"]");
-	    		seInfo.start();
-	    		seError.start();
-				int ret= p.waitFor();
-				seInfo.join();
-	  			seError.join();
-				tmpFile.delete();
-				LOG.info("done");
+				int idx=0;
+				while(idx<L.size())
+					{
+					DepFile dp=L.get(idx);
+					boolean ok=true;
+					for(DepFile other:agenda)
+						{
+						if(dp.hasDependency(other))
+							{
+							ok=false;
+							break;
+							}
+						}
+					if(ok)
+						{
+						agenda.add(dp);
+						L.remove(idx);
+						}
+					else
+						{
+						++idx;
+						}
+					}
+				
+				
+				for(DepFile dp:agenda)
+					{
+					LOG.info("considering "+dp.toString()+" : "+" "+dp.prerequisites+" "+(dp.rule==null));
+					Rule rule= dp.rule;
+					if(!rule.hasCommand()) continue;
+					List<String> requirementsList = rule.getInputs();
+					Context ctx=new Context(rule.getContext());
+					LOG.info(rule.getContext().toString());
+					ctx.put(new SystemVariable(Rule.TARGET_VARNAME, dp.toString()));
+					LOG.info("rule.ctx:"+rule.getContext().toString());
+					LOG.info("rule.ctx:"+ctx);
+					LOG.info("dp:"+dp.toString());
+					
+					File tmpFile = File.createTempFile("xmake.", ".sh",tmpDir);
+					PrintWriter pw=new PrintWriter(tmpFile);
+					pw.println("#/bin/bash");
+					rule.eval(ctx, pw);
+					pw.flush();
+					pw.close();
+					Runtime.getRuntime().exec("chmod u+x "+tmpFile);
+					Process p = new ProcessBuilder().command("/bin/bash",tmpFile.getPath()).start();
+					StreamConsummer seInfo = new StreamConsummer(p.getInputStream(), System.out,"[LOGO "+dp+"]");
+					StreamConsummer seError = new StreamConsummer(p.getErrorStream(), System.err,"[LOGE "+dp+"]");
+		    		seInfo.start();
+		    		seError.start();
+					int ret= p.waitFor();
+					seInfo.join();
+		  			seError.join();
+					tmpFile.delete();
+					LOG.info("done");
+					}
 				}
 			}
 		catch(Exception err)
