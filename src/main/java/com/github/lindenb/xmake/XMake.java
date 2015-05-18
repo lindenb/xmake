@@ -44,7 +44,7 @@ public class XMake
 	private Context mainContext = new Context();
 	private List<Rule> rules = new  ArrayList<Rule>();
 	private Map<File,DepFile> depFilesHash = new  HashMap<File,DepFile>();
-
+	private int numParallelesJobs=1;
 
 	public static class EvalException extends Exception
 		{
@@ -145,9 +145,10 @@ public class XMake
 			{
 			NIL,
 			OK,
-			DIRTY,
+			QUEUED,
+			RUNNING,
 			FATAL
-		}
+			}
 
 	private class XNode
 		{
@@ -439,7 +440,7 @@ public class XMake
 		}
 
 	public class DepFile
-		implements Callable<Integer>
+		implements Callable<DepFile>
 		{	
 		Rule rule=null;
 		File file;
@@ -447,7 +448,6 @@ public class XMake
 		Set<DepFile> prerequisites = new LinkedHashSet<>();
 		Future<Integer> returnedValue=null;
 		String shellPath="/bin/bash";
-		private int ret=-1;
 
 
 		
@@ -510,8 +510,9 @@ public class XMake
 			}
 
 		@Override
-		public Integer call() throws Exception
+		public DepFile call() throws Exception
 			{
+			this.status = Status.RUNNING;
 			StreamConsummer stdout=null;
 			StreamConsummer stderr=null;
 			File tmpFile=null;
@@ -534,18 +535,19 @@ public class XMake
 				stderr = new StreamConsummer(p.getErrorStream(), System.err,"[LOGE]");
 				stdout.start();
 				stderr.start();
-				ret= p.waitFor();
+				int ret= p.waitFor();
 				stdout.join();
 				stderr.join();
 				LOG.info("DOne");
 				tmpFile.delete();
-				return ret;
+				this.status = ret==0?Status.OK:Status.FATAL;
+				return this;
 				}
 			catch(Exception err)
 				{
-				this.ret=-1;
-				System.err.println(err.getMessage());
-				return -1;
+				this.status = Status.FATAL;
+				LOG.warning("Error "+err.getMessage());
+				return this;
 				}
 			finally
 				{
@@ -835,6 +837,39 @@ public class XMake
 				}
 		}
 	
+	private DepFile findNextInQueue(List<DepFile> list)
+		{
+		for(DepFile x:list)
+			{
+			switch(x.status)
+				{
+				case FATAL: break;
+				case QUEUED: break;
+				case RUNNING: break;
+				case OK: break;
+				case NIL:
+					boolean ok=true;
+					for(DepFile y:list)
+						{
+						if(x.hasDependency(y))
+							{
+							switch(y.status)
+								{
+								case FATAL: ok=false;break;
+								case QUEUED: ok=false;break;
+								case RUNNING: ok=false;break;
+								case OK: break;
+								case NIL:ok=false;break;
+								}
+							}
+						}
+					if(ok) return x;
+					break;
+				}
+			}
+		return null;
+		}
+	
 	private void usage(PrintStream out)
 		{
 		System.err.println("Options:");
@@ -1012,40 +1047,40 @@ public class XMake
 			}
 		try
 			{
-			ExecutorService executor = Executors.newFixedThreadPool(1);
-			CompletionService<Integer> completionService = new ExecutorCompletionService<>(executor );
-			/** loop over file, get next pool of indepedant files */
-			List<Command> processed = new ArrayList<>();
-
-			while(!sortedTargets.isEmpty())
+			ExecutorService executor = Executors.newFixedThreadPool(this.numParallelesJobs);
+			/* A service that decouples the production of new asynchronous tasks from the consumption of the results of completed tasks.  */
+			CompletionService<DepFile> completionService = new ExecutorCompletionService<>(executor );
+			
+			/* fill the threaded pool */
+			for(int i=0;i<this.numParallelesJobs;++i)
 				{
-				File tmpDir=null;
-				int idx=0;
-				while(idx<sortedTargets.size())
+				DepFile found = findNextInQueue(sortedTargets);				
+				if(found==null) break;
+				found.status=Status.QUEUED;
+				completionService.submit(found);
+				}
+			
+			
+			for(;;)
+				{
+				boolean containsStatusNil=false;
+				for(DepFile dp:sortedTargets)
 					{
-					DepFile dp=sortedTargets.get(idx);
-					boolean ok=true;
-					for(Command other:agenda)
-						{
-						if(dp.hasDependency(other.depFile))
+					if(dp.status==Status.NIL) { containsStatusNil=true;break;}
+					}
+				if(!containsStatusNil) break;
+				
+				DepFile dp = completionService.take().get();
+				switch(dp.status)
+					{
+					case OK: break;
+					case FATAL:
+						for(DepFile y:sortedTargets)
 							{
-							ok=false;
-							break;
+							if(y.hasDependency(dp)) y.status=Status.FATAL;
 							}
-						}
-					if(ok)
-						{
-						agenda.add(dp);
-						Rule rule= dp.rule;
-						if(!rule.hasCommand()) continue;
-
-						command.returnedValue = completionService.submit(command);
-						sortedTargets.remove(idx);
-						}
-					else
-						{
-						++idx;
-						}
+						break;
+					default:break;
 					}
 				}
 			executor.shutdown();
