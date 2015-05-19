@@ -1,6 +1,8 @@
 package com.github.lindenb.xmake;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
@@ -45,6 +47,9 @@ public class XMake
 	private List<Rule> rules = new  ArrayList<Rule>();
 	private Map<File,DepFile> depFilesHash = new  HashMap<File,DepFile>();
 	private int numParallelesJobs=1;
+	private boolean dry_run=true;//TODO
+	private boolean only_touch=false;//TODO
+	
 
 	public static class EvalException extends Exception
 		{
@@ -147,9 +152,16 @@ public class XMake
 			OK,
 			QUEUED,
 			RUNNING,
-			FATAL
+			FATAL,
+			IGNORE
 			}
 
+	private enum TargetType
+		{
+		NORMAL,
+		PHONY
+		};
+	
 	private class XNode
 		{
 		XNode child=null;
@@ -158,11 +170,11 @@ public class XMake
 			{
 			if(child==null)
 				{
-				child=c;
+				this.child=c;
 				}
 			else
 				{
-				XNode curr=this;
+				XNode curr=this.child;
 				while(curr.next!=null) curr=curr.next;
 				curr.next=c;
 				}
@@ -177,6 +189,7 @@ public class XMake
 			{
 			for(XNode c=this.child;c!=null;c=c.next)
 				{
+				LOG.info("eval "+c.getClass());
 				c.eval(sb, ctx);
 				}
 			return sb;
@@ -256,9 +269,11 @@ public class XMake
 		@Override
 		StringBuilder eval(StringBuilder sb,Context ctx) throws EvalException
 			{
-			XNode v = ctx.get(XMake.DEPENDENCY_VARNAME);
+			LOG.info("target name ");
+			XNode v = ctx.get(XMake.TARGET_VARNAME);
 			if(v!=null)
 				{
+				LOG.info("target name is "+v.eval(ctx));
 				v.eval(sb, ctx);
 				}
 			else
@@ -445,10 +460,11 @@ public class XMake
 		Rule rule=null;
 		File file;
 		Status status = Status.NIL;
+		TargetType targetType = TargetType.NORMAL;
 		Set<DepFile> prerequisites = new LinkedHashSet<>();
 		Future<Integer> returnedValue=null;
 		String shellPath="/bin/bash";
-
+		
 
 		
 		DepFile(File file)
@@ -509,6 +525,8 @@ public class XMake
 			return new File("/tmp");
 			}
 
+		
+		
 		@Override
 		public DepFile call() throws Exception
 			{
@@ -516,31 +534,61 @@ public class XMake
 			StreamConsummer stdout=null;
 			StreamConsummer stderr=null;
 			File tmpFile=null;
+			FileOutputStream touchStream=null;//used to 'touch' a target
 			try
 				{
-				
+				if( XMake.this.only_touch)
+					{
+					if(this.targetType == TargetType.PHONY)
+						{
+						LOG.info("Phony target :"+getFile());
+						}
+					else if(XMake.this.dry_run)
+						{
+						System.out.println("touch "+this.getFile());
+						}
+					else
+						{
+						LOG.warning("touch "+this.getFile());
+						touchStream = new FileOutputStream(this.getFile(), true);//true==APPEND
+						touchStream.flush();
+						touchStream.close();
+						touchStream=null;
+						}
+					this.status = Status.OK;
+					return this;
+					}
 				Context ctx=new Context(this.rule.getContext());
 				ctx.put(TARGET_VARNAME, this.toString());
 				
-				tmpFile = File.createTempFile("xmake.", ".sh",getTmpDir());
-				PrintWriter pw=new PrintWriter(tmpFile);
-				pw.println("#/bin/bash");
-				pw.append(this.rule.command.eval(ctx));
-				pw.flush();
-				pw.close();
-
-				
-				Process p = new ProcessBuilder().command(this.shellPath,tmpFile.getPath()).start();
-				stdout = new StreamConsummer(p.getInputStream(), System.out,"[LOGO]");
-				stderr = new StreamConsummer(p.getErrorStream(), System.err,"[LOGE]");
-				stdout.start();
-				stderr.start();
-				int ret= p.waitFor();
-				stdout.join();
-				stderr.join();
-				LOG.info("DOne");
-				tmpFile.delete();
-				this.status = ret==0?Status.OK:Status.FATAL;
+				if(XMake.this.dry_run)
+					{
+					System.out.println(this.rule.command.eval(ctx));
+					this.status =Status.OK;
+					}
+				else
+					{
+					tmpFile = File.createTempFile("xmake.", ".sh",getTmpDir());
+					PrintWriter pw=new PrintWriter(tmpFile);
+					pw.println("#/bin/bash");
+					pw.append(this.rule.command.eval(ctx));
+					pw.flush();
+					pw.close();
+	
+					
+					Process p = new ProcessBuilder().command(this.shellPath,tmpFile.getPath()).start();
+					stdout = new StreamConsummer(p.getInputStream(), System.out,"[LOGO]");
+					stderr = new StreamConsummer(p.getErrorStream(), System.err,"[LOGE]");
+					stdout.start();
+					stderr.start();
+					int ret= p.waitFor();
+					stdout.join();
+					stderr.join();
+					LOG.info("DOne");
+					tmpFile.delete();
+					this.status = ret==0?Status.OK:Status.FATAL;
+					}
+				LOG.info("returning "+this.getFile()+" with status="+status);
 				return this;
 				}
 			catch(Exception err)
@@ -553,6 +601,7 @@ public class XMake
 				{
 				stdout=null;
 				stderr=null;
+				try { if(touchStream!=null) touchStream.close();} catch(IOException err){}
 				//TODO delete file
 				}
 			}
@@ -623,13 +672,14 @@ public class XMake
 			return XMake.this.workingDirectory;
 			}	
 		
+		
 		void eval(Node root) throws EvalException
 			{
 			for(Node n1 = root.getFirstChild();
 				n1!=null;
 				n1=n1.getNextSibling())
 				{
-				if(_isA(n1, "ouput"))
+				if(_isA(n1, "output"))
 					{
 					if(this.output!=null) throw new EvalException(root,"output defined twice");
 					this.output = new XNode();
@@ -764,6 +814,42 @@ public class XMake
 		return content.trim().isEmpty();
 		}
 
+	private XNode _attribute_or_element(Element root,String name,boolean required) throws EvalException
+		{
+		Attr att= root.getAttributeNode(name);
+		Element e1=null;
+		for(Node n1 = root.getFirstChild();
+				n1!=null;
+				n1=n1.getNextSibling())
+				{
+				if(_isA(n1, name))
+					{
+					if(e1!=null) throw new EvalException(root,"Element <"+name+"/> defined twice");
+					e1=Element.class.cast(e1);
+					}
+				}
+		if(att!=null && e1!=null)
+			{
+			throw new EvalException(root,"Both @"+name+" and <"+name+"/> defined.");
+			}
+		else if(att==null && e1==null)
+			{
+			if(required) throw new EvalException(root,"Both @"+name+" and <"+name+"/> defined.");
+			return null;
+			}
+		else if(att!=null)
+			{
+			return new PlainTextNode(att.getValue());
+			}
+		else
+			{
+			XNode n=new XNode();
+			_eval(n, e1);
+			return n;
+			}
+		}
+
+	
 	private void _assertBlank(Node node)throws EvalException
 		{
 		if(_isBlank(node)) return ;
@@ -839,6 +925,7 @@ public class XMake
 	
 	private DepFile findNextInQueue(List<DepFile> list)
 		{
+		LOG.info("ici");
 		for(DepFile x:list)
 			{
 			switch(x.status)
@@ -847,6 +934,7 @@ public class XMake
 				case QUEUED: break;
 				case RUNNING: break;
 				case OK: break;
+				case IGNORE: break;
 				case NIL:
 					boolean ok=true;
 					for(DepFile y:list)
@@ -858,6 +946,7 @@ public class XMake
 								case FATAL: ok=false;break;
 								case QUEUED: ok=false;break;
 								case RUNNING: ok=false;break;
+								case IGNORE:throw new IllegalStateException(""+x +" "+y);
 								case OK: break;
 								case NIL:ok=false;break;
 								}
@@ -1050,28 +1139,56 @@ public class XMake
 			ExecutorService executor = Executors.newFixedThreadPool(this.numParallelesJobs);
 			/* A service that decouples the production of new asynchronous tasks from the consumption of the results of completed tasks.  */
 			CompletionService<DepFile> completionService = new ExecutorCompletionService<>(executor );
+			/* count number in queue */
+			int count_jobs_in_queue = 0;
 			
 			/* fill the threaded pool */
 			for(int i=0;i<this.numParallelesJobs;++i)
 				{
 				DepFile found = findNextInQueue(sortedTargets);				
 				if(found==null) break;
+				LOG.info("queuing "+found);
 				found.status=Status.QUEUED;
 				completionService.submit(found);
+				++count_jobs_in_queue;
 				}
 			
 			
 			for(;;)
 				{
-				boolean containsStatusNil=false;
-				for(DepFile dp:sortedTargets)
-					{
-					if(dp.status==Status.NIL) { containsStatusNil=true;break;}
-					}
-				if(!containsStatusNil) break;
+				LOG.info("ici0");
+				DepFile nextInQueue = findNextInQueue(sortedTargets);	
 				
-				DepFile dp = completionService.take().get();
-				switch(dp.status)
+				
+				if(count_jobs_in_queue>0)
+					{
+					LOG.info("ici1");
+					DepFile dp = completionService.take().get();
+					LOG.info("ici2");
+					switch(dp.status)
+						{
+						case OK: break;
+						case FATAL:
+							for(DepFile y:sortedTargets)
+								{
+								if(y.hasDependency(dp)) y.status=Status.FATAL;
+								}
+							break;
+						default:break;
+						}
+					count_jobs_in_queue--;
+					}
+				if(nextInQueue==null)
+					{
+					break;
+					}
+				else
+					{
+					LOG.info("queuing "+nextInQueue);
+					nextInQueue.status=Status.QUEUED;
+					completionService.submit(nextInQueue);
+					DepFile dp = completionService.take().get();
+					switch(dp.status)
 					{
 					case OK: break;
 					case FATAL:
@@ -1082,7 +1199,16 @@ public class XMake
 						break;
 					default:break;
 					}
+					++count_jobs_in_queue;	
+					}
 				}
+			
+			while(count_jobs_in_queue>0)
+				{
+				completionService.take();
+				count_jobs_in_queue--;
+				}
+			
 			executor.shutdown();
 			}
 		catch(Exception err)

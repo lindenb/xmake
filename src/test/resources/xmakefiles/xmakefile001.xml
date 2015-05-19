@@ -1,4 +1,4 @@
-<xmake>
+<xmake xmlns="http://github.com/lindenb/xmake/">
 
 <rule>
 	<output>test.c</output>
