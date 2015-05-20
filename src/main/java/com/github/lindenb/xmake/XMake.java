@@ -1,3 +1,31 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) 2014 Pierre Lindenbaum
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+History:
+* 2015 creation
+
+*/
 package com.github.lindenb.xmake;
 
 import java.io.File;
@@ -6,7 +34,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -19,10 +49,12 @@ import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
+
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -49,8 +81,12 @@ public class XMake
 	private int numParallelesJobs=1;
 	private boolean dry_run=true;//TODO
 	private boolean only_touch=false;//TODO
-	
+	/** specific target file selected by the user. Null if not defined . When compiling, will be set to the first found target */
+	private Set<File> useTargetFiles = null;
+	/** tmp directory */
+	private File sysTmpDirectory = new File(System.getProperty("java.io.tmpdir", "/tmp"));
 
+	@SuppressWarnings("serial")
 	public static class EvalException extends Exception
 		{
 		public EvalException() {
@@ -193,6 +229,10 @@ public class XMake
 				c.eval(sb, ctx);
 				}
 			return sb;
+			}
+		String evalChildren(Context ctx) throws EvalException
+			{
+			return evalChildren(new StringBuilder(),ctx).toString();
 			}
 
 		
@@ -378,8 +418,23 @@ public class XMake
 			}
 		}
 
-	
-	
+	private class TrimNode  extends XNode
+		{
+		@Override
+		StringBuilder eval(StringBuilder sb,Context ctx) throws EvalException
+			{
+			return sb.append(this.evalChildren(ctx).trim());
+			}
+		}
+	private class NormalizeSpaceNode  extends XNode
+		{
+		@Override
+		StringBuilder eval(StringBuilder sb,Context ctx) throws EvalException
+			{
+			return sb.append(this.evalChildren(ctx).replaceAll(WSPACES.pattern()," ").trim());
+			}
+		}
+
 	private class Context
 		{
 		private Context parent=null;
@@ -454,6 +509,11 @@ public class XMake
 			}
 		}
 
+	/**
+	 * Dependency File
+	 * @author lindenb
+	 *
+	 */
 	public class DepFile
 		implements Callable<DepFile>
 		{	
@@ -522,7 +582,7 @@ public class XMake
 
 		public File getTmpDir()
 			{
-			return new File("/tmp");
+			return XMake.this.sysTmpDirectory;
 			}
 
 		
@@ -905,6 +965,14 @@ public class XMake
 							{
 							parent.appendChild(new NotDir());
 							}
+						else if(_isA(e1,"trim"))
+							{
+							parent.appendChild(new TrimNode());
+							}
+						else if(_isA(e1,"normalize-space"))
+							{
+							parent.appendChild(new NormalizeSpaceNode());
+							}
 						else if(_isA(e1,"dir") || _isA(e1,"directory"))
 							{
 							parent.appendChild(new OnlyDir());
@@ -973,7 +1041,7 @@ public class XMake
 	public int instanceMain(String args[]) throws EvalException
 		{
 		String makefileFile=null;
-		LOG.setLevel(Level.INFO);
+		LOG.setLevel(Level.SEVERE);
 		
 		int optind=0;
 		while(optind< args.length)
@@ -989,13 +1057,25 @@ public class XMake
 				{
 				makefileFile=args[++optind];
 				}
+			else if((args[optind].equals("--touch") || args[optind].equals("-t") ))
+				{
+				this.only_touch = true;
+				}
+			else if((args[optind].equals("-n") || args[optind].equals("--just-print") || args[optind].equals("--dry-run") || args[optind].equals("--recon")))
+				{
+				this.dry_run = true;
+				}
 			else if((args[optind].equals("-C") ) && optind+1 < args.length)
 				{
 				this.workingDirectory=new File(args[++optind]);
 				}
-			else if(args[optind].equals("--log") && optind+1 < args.length)
+			else if((args[optind].equals("--log") || args[optind].equals("--debug")) && optind+1 < args.length)
 				{
 				LOG.setLevel(Level.parse(args[++optind]));
+				}
+			else if(args[optind].equals("-d"))
+				{
+				LOG.setLevel(Level.ALL);
 				}
 			else if(args[optind].equals("--"))
 				{
@@ -1014,6 +1094,27 @@ public class XMake
 			++optind;
 			}
 		
+		
+		
+		/* parse remaining arguments : targets and variables */
+		while(optind < args.length)
+			{
+			String arg= args[optind];
+			
+			int eq=arg.indexOf('=');
+			if(eq>0)
+				{
+				this.mainContext.put(arg.substring(0,eq), arg.substring(eq+1));
+				}
+			else
+				{
+				File f=new File(this.workingDirectory,arg);
+				LOG.info("Adding "+f+" to working directory");
+				if(this.useTargetFiles==null) this.useTargetFiles = new LinkedHashSet<>();
+				this.useTargetFiles.add(f);
+				}
+			++optind;
+			}
 		
 		//search default makefile
 		if(makefileFile==null)
@@ -1039,8 +1140,11 @@ public class XMake
 		try {
 			DocumentBuilderFactory dbf=DocumentBuilderFactory.newInstance();
 			dbf.setNamespaceAware(true);
+			dbf.setXIncludeAware(true);
+			dbf.setExpandEntityReferences(true);
+			dbf.setIgnoringComments(true);
 			DocumentBuilder db=dbf.newDocumentBuilder();
-			
+				
 			if(makefileFile.equals("-"))
 				{
 				LOG.info("Reading <stdin>");
@@ -1066,6 +1170,15 @@ public class XMake
 			{
 			for(DepFile outDep : rule.getDepFiles())
 				{
+				/* no specific target file found so far. We use the first met target as the main target */
+				if(this.useTargetFiles==null)
+					{
+					LOG.info("Main target is "+outDep.getFile());
+					this.useTargetFiles = new LinkedHashSet<>();
+					this.useTargetFiles.add(outDep.getFile());
+					}
+
+				
 				DepFile prevDeclaration = this.depFilesHash.get(outDep.getFile()) ;
 				if(prevDeclaration!=null )
 					{
@@ -1104,11 +1217,49 @@ public class XMake
 			}
 		//check for loops
 		for(DepFile df:this.depFilesHash.values())
+			{
 			df.checkForLoops();
+			}
+
+		if(this.useTargetFiles!=null)
+			{
+			Set<DepFile> selTargets = new HashSet<>();
+			for(File userTargetFile: this.useTargetFiles)
+				{
+				DepFile depFile = this.depFilesHash.get(userTargetFile);
+				if(depFile==null)
+					{
+					LOG.warning("unknown target file: "+userTargetFile);
+					return -1;
+					}
+				selTargets.add(depFile);
+				}
+			for(DepFile depFile:this.depFilesHash.values())
+				{
+				boolean keep=false;
+				
+				for(DepFile sel:selTargets)
+					{
+					if(sel.equals(depFile) || sel.hasDependency(depFile))
+						{
+						keep=true;
+						break;
+						}
+					}
+				if(!keep)
+					{
+					LOG.info("ignoring "+depFile);
+					depFile.status = Status.IGNORE;
+					}
+				}
+			}
+		
+		
 		//check for target without rules
 		for(DepFile df:this.depFilesHash.values())
 			{
 			if(df.rule!=null) continue;
+			if(df.status==Status.IGNORE) continue;
 			if(df.exists()) continue;
 			LOG.exiting("XMake","instanceMain",
 					"No rule to build "+df+" required by "+df.getRequiredBy());
@@ -1226,6 +1377,36 @@ public class XMake
 	
 	public static void main(String args[]) throws Exception
 		{
+		final SimpleDateFormat datefmt=new SimpleDateFormat("yy-MM-dd HH:mm:ss");
+		LOG.setUseParentHandlers(false);
+		LOG.addHandler(new Handler()
+			{
+			@Override
+			public void publish(LogRecord record) {
+				Date now = new Date(record.getMillis());
+				System.err.print("["+record.getLevel()+"]");
+				System.err.print(" ");
+				System.err.print(datefmt.format(now));
+				System.err.print(" \"");
+				System.err.print(record.getMessage());
+				System.err.println("\"");
+				if(record.getThrown()!=null)
+					{
+					record.getThrown().printStackTrace(System.err);
+					}
+				}
+			
+			@Override
+			public void flush() {
+				System.err.flush();
+				}
+			
+			@Override
+			public void close() throws SecurityException {
+				
+				}
+			});		
+		
 		XMake app = new XMake();
 		app.instanceMainWithExit(args); 
 		}

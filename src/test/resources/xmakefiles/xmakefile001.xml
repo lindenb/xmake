@@ -2,7 +2,8 @@
 
 <rule>
 	<output>test.c</output>
-	<command>echo "int main(int argc,char** argv){return 0;}" &gt; <target/></command>
+	<command>echo "int main(int argc,char** argv){return 0;}" &gt; <target/>
+echo "code created."</command>
 </rule>
 
 </xmake>
