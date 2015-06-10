@@ -3,7 +3,7 @@
 <rule>
 	<output>test.c</output>
 	<command>echo "int main(int argc,char** argv){return 0;}" &gt; <target/>
-echo "code created."</command>
+echo "Message: <toupper>code created</toupper>"</command>
 </rule>
 
 </xmake>

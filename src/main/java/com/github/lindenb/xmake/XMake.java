@@ -1,7 +1,7 @@
 /*
 The MIT License (MIT)
 
-Copyright (c) 2014 Pierre Lindenbaum
+Copyright (c) 2015 Pierre Lindenbaum
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -33,9 +33,12 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
+import java.math.BigInteger;
+import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -108,6 +111,8 @@ public class XMake
 	private boolean always_make=false;
 	/**   -k, --keep-going            Keep going when some targets can't be made.*/
 	private boolean keep_going=false;
+	/**    -i, --ignore-errors         Ignore errors from commands. */
+	private boolean ignore_errors=false;
 	/** specific target file selected by the user. Null if not defined . When compiling, will be set to the first found target */
 	private Set<File> useTargetFiles = null;
 	/** tmp directory. Default is System.getProperty("java.io.tmpdir", "/tmp")  */
@@ -143,6 +148,26 @@ public class XMake
 		@SuppressWarnings("unused")
 		public EvalException(Throwable cause) {
 			super(cause);
+			}
+		}
+	
+	private static class StoreOutputStream extends OutputStream
+		{
+		OutputStream delegate;
+		
+		StoreOutputStream(OutputStream delegate)
+			{
+			this.delegate=delegate;
+			}
+		@Override
+		public void write(int b) throws IOException
+			{
+			if(b<0) return;
+			this.delegate.write(b);
+			}
+		@Override
+		public void close() throws IOException {
+			XMake.safeClose(this.delegate);
 			}
 		}
 	
@@ -485,6 +510,61 @@ public class XMake
 			}
 		}
 
+	private class ToUpperCaseNode  extends XNode
+		{
+		static final String TAG="toupper";
+		@Override
+		public StringBuilder eval(StringBuilder sb,Context ctx) throws EvalException
+			{
+			LOG.info("############"+this.evalChildren(ctx));
+			return sb.append(this.evalChildren(ctx).toUpperCase());
+			}
+		}
+	private class ToLowerCaseNode  extends XNode
+		{
+		static final String TAG="tolower";
+		@Override
+		public StringBuilder eval(StringBuilder sb,Context ctx) throws EvalException
+			{
+			return sb.append(this.evalChildren(ctx).toLowerCase());
+			}
+		}
+
+	private abstract class AbstractMessageDigestNode  extends XNode
+		{
+		protected abstract String getAlgorithmName();
+		@Override
+		public StringBuilder eval(StringBuilder sb,Context ctx) throws EvalException
+			{
+			try
+				{
+				MessageDigest m = MessageDigest.getInstance(getAlgorithmName());
+				m.reset();
+				m.update(this.evalChildren(ctx).getBytes());
+				byte[] digest = m.digest();
+				BigInteger bigInt = new BigInteger(1,digest);
+				return sb.append(bigInt.toString(16));
+				}
+			catch(Exception err)
+				{
+				throw new EvalException(err);
+				}
+		
+			}
+		}
+
+
+	
+	private class MD5Node  extends AbstractMessageDigestNode
+		{
+		static final String TAG="md5";
+		@Override
+		protected String getAlgorithmName() {
+			return "MD5";
+			}
+		}
+
+	
 	/** associative array  Map&lt;String, XNode&gt;
 	 * if a key is not, it is searched recursively in the parent's context  */
 	private class Context
@@ -981,10 +1061,6 @@ public class XMake
 				
 		}
 		
-	private void clear()
-		{
-		this.rules.clear();
-		}
 	
 	private void compile(Document dom) throws EvalException
 		{
@@ -1145,6 +1221,18 @@ public class XMake
 						else if(_isA(e1,OnlyDir.TAG) || _isA(e1,"directory"))
 							{
 							parent.appendChild(new OnlyDir());
+							}
+						else if(_isA(e1,ToUpperCaseNode.TAG))
+							{
+							parent.appendChild(new ToUpperCaseNode());
+							}
+						else if(_isA(e1,ToLowerCaseNode.TAG))
+							{
+							parent.appendChild(new ToUpperCaseNode());
+							}
+						else if(_isA(e1,MD5Node.TAG))
+							{
+							parent.appendChild(new MD5Node());
 							}
 						else
 							{
@@ -1322,6 +1410,10 @@ public class XMake
 		out.println(" -n, --just-print, --dry-run, --recon Don't actually run any commands; just print them.");
 		out.println(" --report FILE  Save a XHTML report to this file.");
 		out.println(" -B, --always-make     Unconditionally make all targets.");
+		out.println(" -o FILE --old-file FILE, --assume-old FILE  Consider FILE to be very old and don't remake it.");
+		out.println(" -q, --question              Run no commands; exit status says if up to date.");
+		out.println(" -j [N], --jobs[=N]          Allow N jobs at once");
+		out.println(" -i, --ignore-errors         Ignore errors from commands.");
 		out.println();
 		}
 	
@@ -1335,6 +1427,10 @@ public class XMake
 		{
 		String makefileFile=null;
 		LOG.setLevel(Level.SEVERE);
+		/* Consider FILE to be very old and don't remake it. */
+		Set<String> assumeOldFilesStrs =new HashSet<>();
+		/* option -q --question */
+		boolean asking_question=false;
 		
 		/* parse arguments */
 		int optind=0;
@@ -1347,9 +1443,38 @@ public class XMake
 				usage(System.out);
 				return 0;
 				}
+			else if(args[optind].equals("-i") || args[optind].equals("--ignore-errors"))
+				{
+				ignore_errors = true;
+				}
+			else if(args[optind].equals("-q") || args[optind].equals("--question"))
+				{
+				asking_question = true;
+				}
 			else if((args[optind].equals("--file") || args[optind].equals("-f") ) && optind+1 < args.length)
 				{
 				makefileFile=args[++optind];
+				}
+			else if((args[optind].equals("-j") || args[optind].equals("--jobs") ) && optind+1 < args.length)
+				{
+				String njobs=args[++optind];
+				try {
+					this.numParallelesJobs = Integer.parseInt(njobs);
+					if(this.numParallelesJobs<1)
+						{
+						System.err.println("Bad option --jobs="+njobs);
+						return -1;
+						}
+					}
+				catch (Exception e)
+					{
+					System.err.println("Bad option --jobs="+njobs);
+					return -1;
+					}
+				}
+			else if((args[optind].equals("-o") || args[optind].equals("--old-file")  || args[optind].equals("--old-file")) && optind+1 < args.length)
+				{
+				assumeOldFilesStrs.add(args[++optind]);
 				}
 			else if((args[optind].equals("--touch") || args[optind].equals("-t") ))
 				{
@@ -1467,6 +1592,12 @@ public class XMake
 			LOG.log(Level.SEVERE,"Cannot read input "+makefileFile);
 			e.printStackTrace();
 			return -1;
+			}
+		//manage old files
+		Set<File> assumeOldFiles=new HashSet<>(assumeOldFilesStrs.size());
+		for(String s:assumeOldFilesStrs)
+			{
+			assumeOldFiles.add(new File(this.workingDirectory,s));
 			}
 		
 		compile(xmlMakefile);
@@ -1595,6 +1726,13 @@ public class XMake
 					{
 					continue;
 					}
+				
+				//user force this to be old
+				if(assumeOldFiles.contains(df1.getFile()))
+					{
+					continue;
+					}
+				
 				boolean flag_as_ok=true;
 				long timestamp1 = df1.getFile().lastModified();
 				
@@ -1641,7 +1779,14 @@ public class XMake
 			targetsQueue.add(dp);
 			}
 		
+		
 		dumpXHtmlReport();
+		
+		/** asking question : return 0 if everything is ok */
+		if( asking_question )
+			{
+			return targetsQueue.isEmpty()?0:-1;
+			}
 		
 		boolean all_targets_successfully_rebuilt=true;
 		try
@@ -1693,7 +1838,7 @@ public class XMake
 							while(y_index<targetsQueue.size())
 								{
 								DepFile y = targetsQueue.get(y_index);
-								if(y.hasDependency(dp))
+								if(y.hasDependency(dp) && !this.ignore_errors)
 									{
 									y.status=Status.FATAL;
 									targetsQueue.remove(y_index);

@@ -4,12 +4,13 @@
 all: test
 
 test: dist/xmake.jar
-	find ./src/test/resources/xmakefiles -type f -name "xmakefile*.xml" -exec java -cp $< com.github.lindenb.xmake.XMake -d --report '{}.html' -f '{}' ';'
+	find ./src/test/resources/xmakefiles -type f -name "xmakefile*.xml" -exec java -jar $<  -d --report '{}.html' -f '{}' ';'
 
 dist/xmake.jar : $(addsuffix .java,$(addprefix  src/main/java/com/github/lindenb/xmake/,XMake))
-	mkdir -p tmp dist
+	mkdir -p tmp/META-INF dist
+	echo "Main-Class: com.github.lindenb.xmake.XMake" > tmp/META-INF/MANIFEST.MF
 	javac -d tmp -sourcepath src/main/java $<
-	jar cvf dist/xmake.jar -C tmp .
+	jar cmvf tmp/META-INF/MANIFEST.MF dist/xmake.jar -C tmp .
 	rm -rf tmp
 
 javadoc: doc/javadoc/index.html 
