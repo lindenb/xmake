@@ -36,6 +36,7 @@ import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
+import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -63,6 +64,7 @@ import java.util.regex.Pattern;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.stream.XMLOutputFactory;
+import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamWriter;
 
 import org.w3c.dom.Attr;
@@ -99,7 +101,8 @@ public class XMake
 	/** number of parallele jobs */
 	private int numParallelesJobs=1;
 	/** dry run */
-	private boolean dry_run=true;//TODO
+	private boolean dry_run=false;
+	/** only touch files */
 	private boolean only_touch=false;//TODO
 	/** option -B, --always-make           Unconditionally make all targets. */
 	private boolean always_make=false;
@@ -241,7 +244,6 @@ public class XMake
 			{
 			for(XNode c=this.child;c!=null;c=c.next)
 				{
-				LOG.info("eval "+c.getClass());
 				c.eval(sb, ctx);
 				}
 			return sb;
@@ -584,6 +586,8 @@ public class XMake
 	private class DepFile
 		implements Callable<DepFile>
 		{	
+		/** id when exporting to dot, html... */
+		long exportid= ++XMake.ID_GENERATOR;
 		/** associated rule to create the target*/
 		Rule rule=null;
 		/** the file path to be created */
@@ -597,6 +601,10 @@ public class XMake
 		Future<Integer> returnedValue=null;
 		/** shell to be invoked */
 		String shellPath="/bin/bash";
+		/** system time we started the analysis */
+		long timeStampStartRunning=-1L;
+		/** system time we ended the analysis */
+		long timeStampEndRunning=-1L;
 
 		/** constructor with just a file. The rule is unknown for now */
 		DepFile(File file)
@@ -676,6 +684,7 @@ public class XMake
 			{
 			LOG.info("Setting Status to RUNNING for "+this.file);
 			this.status = Status.RUNNING;
+			this.timeStampStartRunning = System.currentTimeMillis();
 			/** stream consummer to echo stdout */
 			StreamConsummer stdout=null;
 			/** stream consummer to echo stdout */
@@ -759,6 +768,7 @@ public class XMake
 				stdout=null;
 				stderr=null;
 				XMake.safeClose(touchStream);
+				this.timeStampEndRunning = System.currentTimeMillis();
 				//TODO delete file
 				}
 			}
@@ -785,6 +795,65 @@ public class XMake
 					}
 				}
 			return reqs;
+			}
+		
+		public void writeHtmlReport(XMLStreamWriter w) throws XMLStreamException,EvalException
+			{
+			DateFormat dateFormat=new SimpleDateFormat();
+			w.writeStartElement("tr");
+			
+			w.writeStartElement("td");
+			w.writeEmptyElement("a");
+			w.writeAttribute("name", "dp"+this.exportid);
+			
+			w.writeStartElement("span");
+			w.writeAttribute("class", this.status.name());
+			w.writeAttribute("title", getFile().getAbsolutePath());
+			w.writeCharacters(getFile().getAbsolutePath());
+			w.writeEndElement();//span
+			w.writeEndElement();//td
+			
+			w.writeStartElement("td");
+			w.writeCharacters(this.status.name());
+			w.writeEndElement();
+			
+			
+			w.writeStartElement("td");
+			if(this.timeStampStartRunning>-1L)
+				{
+				w.writeCharacters(dateFormat.format(new Date(this.timeStampStartRunning)));
+				}
+			w.writeEndElement();
+			
+			w.writeStartElement("td");
+			if(this.timeStampStartRunning>-1L)
+				{
+				w.writeCharacters(dateFormat.format(new Date(this.timeStampEndRunning>-1L?this.timeStampEndRunning:System.currentTimeMillis())));
+				}
+			w.writeEndElement();
+
+			w.writeStartElement("td");
+			//duration
+			w.writeEndElement();
+			
+			w.writeStartElement("td");
+			for(File dpcf: this.getPrerequisiteFiles())
+				{
+				DepFile dpc = XMake.this.depFilesHash.get(dpcf);
+				if(dpc==null) continue;
+				w.writeStartElement("a");
+				w.writeAttribute("class", dpc.status.name());
+				w.writeAttribute("href", "#dp"+dpc.exportid);
+				w.writeAttribute("title", dpc.getFile().getAbsolutePath());
+				w.writeCharacters(dpc.getFile().getName());
+				w.writeEndElement();//a
+				w.writeCharacters("; ");
+				}
+			w.writeEndElement();
+
+			
+			
+			w.writeEndElement();
 			}
 			
 		@Override
@@ -1174,18 +1243,59 @@ public class XMake
 			XMLOutputFactory xof= XMLOutputFactory.newFactory();
 			w = xof.createXMLStreamWriter(pw);
 			w.writeStartElement("html");
+			w.writeStartElement("head");
+			
+			w.writeStartElement("title");
+			w.writeCharacters("XMake");
+			w.writeEndElement();//title
+
+			w.writeStartElement("style");
+			w.writeCharacters("."+Status.OK.name()+" {color:green;}\n" );
+			w.writeCharacters("."+Status.FATAL.name()+" {color:red;}\n" );
+			w.writeCharacters("."+Status.IGNORE.name()+" {color:gray;}\n" );
+			w.writeCharacters("."+Status.NIL.name()+" color:lightgray;}\n" );
+			w.writeCharacters("."+Status.QUEUED.name()+" {color:blue;}\n" );
+			w.writeCharacters("."+Status.RUNNING.name()+" {color:orange;}\n" );
+			w.writeEndElement();//style
+			
+			w.writeEndElement();//head
+			
 			w.writeStartElement("body");
 			
 			w.writeStartElement("table");
 			w.writeStartElement("thead");
+			w.writeStartElement("tr");
 			
+			w.writeStartElement("th");
+			w.writeCharacters("Target");
+			w.writeEndElement();//th
+			
+			w.writeStartElement("th");
+			w.writeCharacters("Status");
+			w.writeEndElement();//th
+			
+			w.writeStartElement("th");
+			w.writeCharacters("Begin");
+			w.writeEndElement();//th
+			
+			w.writeStartElement("th");
+			w.writeCharacters("End");
+			w.writeEndElement();//th
+
+			w.writeStartElement("th");
+			w.writeCharacters("Deps");
+			w.writeEndElement();//th
+
+			
+			w.writeEndElement();//tr
+
 			w.writeEndElement();//thead
 
 			w.writeStartElement("tbody");
 			
 			for(DepFile dp:this.depFilesHash.values())
 				{
-				
+				dp.writeHtmlReport(w);
 				}
 			
 			w.writeEndElement();//tbdy
@@ -1490,7 +1600,7 @@ public class XMake
 				
 				for(DepFile df2:this.depFilesHash.values())
 					{
-					if(!df1.hasDependency(df2)) continue;
+					if(df1==df2 || !df1.hasDependency(df2)) continue;
 
 					if(df2.targetType==TargetType.PHONY)
 						{
@@ -1519,14 +1629,15 @@ public class XMake
 					df1.status=Status.OK;
 					}
 				}
-			}
+			}//end of !always_make
 		
 		//create an array of DepFile
 		List<DepFile> targetsQueue = new Vector<>(this.depFilesHash.size());
 		//and fill this array
 		for(DepFile dp:this.depFilesHash.values())
 			{
-			if(dp.status==Status.IGNORE) continue;
+			if(dp.status==Status.IGNORE ||
+			   dp.status==Status.OK) continue;//e.g: timestamp checked, no need to remake_target
 			targetsQueue.add(dp);
 			}
 		

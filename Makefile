@@ -4,7 +4,7 @@
 all: test
 
 test: dist/xmake.jar
-	find ./src/test/resources/xmakefiles -type f -name "xmakefile*.xml" -exec java -cp $< com.github.lindenb.xmake.XMake -d -f '{}' ';'
+	find ./src/test/resources/xmakefiles -type f -name "xmakefile*.xml" -exec java -cp $< com.github.lindenb.xmake.XMake -d --report '{}.html' -f '{}' ';'
 
 dist/xmake.jar : $(addsuffix .java,$(addprefix  src/main/java/com/github/lindenb/xmake/,XMake))
 	mkdir -p tmp dist
