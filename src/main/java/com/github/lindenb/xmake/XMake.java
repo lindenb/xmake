@@ -151,6 +151,41 @@ public class XMake
 			}
 		}
 	
+	private static class TeeOutputStream extends OutputStream
+		{
+		private OutputStream out;
+		private OutputStream branch;
+		private boolean closeBranchOnClose;
+		TeeOutputStream(OutputStream out, OutputStream branch,boolean closeBranchOnClose)
+			{
+			this.out=out;
+			this.branch=branch;
+			this.closeBranchOnClose=closeBranchOnClose;
+			}
+		@Override
+		public void write(int b) throws IOException
+			{
+			this.out.write(b);
+			this.branch.write(b);
+			}
+		@Override
+		public void write(byte[] b, int off, int len) throws IOException {
+			this.out.write(b, off, len);
+			this.branch.write(b, off, len);
+			}
+		@Override
+		public void flush() throws IOException {
+			this.out.flush();
+			this.branch.flush();
+			}
+		@Override
+		public void close() throws IOException {
+			if(this.closeBranchOnClose)  XMake.safeClose(this.branch);
+			XMake.safeClose(this.out);
+			}
+		}
+
+	
 	private static class StoreOutputStream extends OutputStream
 		{
 		OutputStream delegate;
@@ -179,19 +214,19 @@ public class XMake
 		/** stream to consumme */
 	    private InputStream in;
 	    /** where to print */
-	    private PrintStream pw;
+	    private OutputStream pw;
 	    /** prefix to print at the beginning of line, may be null */
-		private String prefix;
+		private byte[] prefix;
 		
 	    public StreamConsummer(
 	    		InputStream in,
-	    		PrintStream pw,
+	    		OutputStream pw,
 	    		String prefix
 	    		)
 			{
 	        this.in = in;
 	        this.pw = pw;
-	        this.prefix=prefix;
+	        this.prefix=(prefix==null || prefix.isEmpty()?null:prefix.getBytes());
 	    	}
 		
 	    @Override
@@ -202,7 +237,7 @@ public class XMake
 	    		int c;
 	    		while((c=in.read())!=-1)
 	    			{
-	    			if(begin && this.prefix!=null) pw.print(prefix);
+	    			if(begin && this.prefix!=null) pw.write(prefix);
 	    			pw.write((char)c);
 	    			begin=(c=='\n');
 	    			}
@@ -758,6 +793,11 @@ public class XMake
 			}
 
 		
+		public boolean isRedirectingStdoutToTarget()
+			{
+			return false;
+			}
+		
 		/** implementation of call. return this */
 		@Override
 		public DepFile call() throws Exception
@@ -823,7 +863,7 @@ public class XMake
 	
 					/* execute the shell command */
 					Process p = new ProcessBuilder().command(this.shellPath,tmpFile.getPath()).start();
-					stdout = new StreamConsummer(p.getInputStream(), System.out,"[LOG:OUT]");
+					stdout = new StreamConsummer( p.getInputStream(),System.out,"[LOG:OUT]");
 					stderr = new StreamConsummer(p.getErrorStream(), System.err,"[LOG:ERR]");
 					stdout.start();
 					stderr.start();
@@ -1224,15 +1264,21 @@ public class XMake
 							}
 						else if(_isA(e1,ToUpperCaseNode.TAG))
 							{
-							parent.appendChild(new ToUpperCaseNode());
+							XNode child = new  ToUpperCaseNode();
+							parent.appendChild(child);
+							_eval(child, e1);
 							}
 						else if(_isA(e1,ToLowerCaseNode.TAG))
 							{
-							parent.appendChild(new ToUpperCaseNode());
+							XNode child = new  ToLowerCaseNode();
+							parent.appendChild(child);
+							_eval(child, e1);
 							}
 						else if(_isA(e1,MD5Node.TAG))
 							{
-							parent.appendChild(new MD5Node());
+							XNode child = new  MD5Node();
+							parent.appendChild(child);
+							_eval(child, e1);
 							}
 						else
 							{
@@ -1580,11 +1626,13 @@ public class XMake
 				{
 				LOG.info("Reading <stdin>");
 				xmlMakefile = db.parse(System.in);
+				this.mainContext.put("MAKEFILE_LIST", "stdin");
 				}
 			else
 				{
 				LOG.info("Reading "+makefileFile);
 				xmlMakefile = db.parse(new File(makefileFile));
+				this.mainContext.put("MAKEFILE_LIST", makefileFile);
 				}
 			} 
 		catch (Exception e)
